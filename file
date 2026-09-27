@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>双梯电梯模拟系统 - 互锁安全控制版</title>
+    <style>
+        :root {
+            --shaft-width: 90px;
+            --car-color: #2c3e50;
+            --pawn-color: #e74c3c;
+            --pawn-size: 22px;
+            --floor-height-pc: 10%;
+        }
+
+        * { box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; }
+        h1 { margin-bottom: 5px; color: #2c3e50; }
+        p.subtitle { color: #7f8c8d; font-size: 14px; margin-top: 0; margin-bottom: 20px; }
+
+        #simulation-container { display: flex; gap: 30px; background: white; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.08); padding: 25px; min-width: 760px; height: 560px; position: relative; }
+
+        /* 左侧控制区 */
+        #controls-left { width: 240px; display: flex; flex-direction: column; gap: 15px; border-right: 1px solid #eee; padding-right: 20px; }
+        .panel-box { background: #fafafa; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; }
+        .panel-title { font-weight: bold; font-size: 14px; color: #34495e; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+        .status-badge { font-size: 12px; padding: 2px 8px; background: #e0e0e0; border-radius: 12px; color: #333; }
+        .status-badge.inside { background: #d4edda; color: #155724; }
+
+        .form-group { margin-bottom: 10px; }
+        label { font-size: 12px; color: #666; display: block; margin-bottom: 4px; }
+        select { width: 100%; padding: 6px; border-radius: 4px; border: 1px solid #ccc; font-size: 13px; }
+
+        .btn { width: 100%; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; background: white; cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.2s; margin-top: 5px; }
+        .btn:hover:not(:disabled) { background: #f1f5f9; border-color: #94a3b8; }
+        .btn-call { background: #3498db; color: white; border: none; }
+        .btn-call:hover { background: #2980b9; }
+        .btn-call.active { background: #e67e22; }
+        
+        .btn-exit { background: #e74c3c; color: white; border: none; font-weight: bold; }
+        .btn-exit:hover:not(:disabled) { background: #c0392b; }
+        .btn-exit:disabled { background: #bdc3c7; color: #7f8c8d; cursor: not-allowed; opacity: 0.7; }
+
+        /* 乘客信息提示 */
+        .npc-info-box { background: #ebf8ff; border: 1px solid #bae6fd; border-radius: 6px; padding: 8px; margin-bottom: 10px; font-size: 12px; color: #0369a1; display: flex; align-items: center; justify-content: space-between; }
+
+        /* 电梯轿厢内部面板按键 */
+        .grid-buttons { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-top: 8px; }
+        .btn-floor { padding: 8px; font-weight: bold; border-radius: 4px; border: 1px solid #cbd5e1; background: white; cursor: pointer; transition: all 0.2s; }
+        .btn-floor:hover { background: #e2e8f0; }
+        .btn-floor.active { background: #f39c12; color: white; border-color: #d35400; box-shadow: 0 0 8px rgba(243, 156, 18, 0.5); }
+
+        /* 右侧电梯井与楼层 */
+        #shafts-container { flex: 1; display: flex; gap: 40px; position: relative; background: #fcfcfc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 0 20px; }
+        .elevator-shaft { width: var(--shaft-width); height: 100%; background: #edf2f7; border-left: 2px solid #cbd5e1; border-right: 2px solid #cbd5e1; position: relative; overflow: hidden; }
+        
+        .floor-marker { position: absolute; left: -10px; right: -10px; border-top: 1px dashed #cbd5e1; font-size: 11px; color: #94a3b8; padding-left: 5px; pointer-events: none; }
+        
+        /* 电梯轿厢 */
+        .elevator-car {
+            position: absolute; left: 3px; width: calc(var(--shaft-width) - 6px);
+            height: var(--floor-height-pc); background: var(--car-color);
+            border-radius: 4px; transition: bottom 0.8s ease-in-out; display: flex;
+            flex-direction: column; justify-content: center; align-items: center; color: white;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.2);
+        }
+        .car-display { font-size: 14px; font-weight: bold; color: #f1c40f; }
+        .car-dir { font-size: 10px; color: #ecf0f1; }
+
+        /* 小人 (Pawn) */
+        #user-pawn {
+            width: var(--pawn-size); height: var(--pawn-size); background: var(--pawn-color);
+            border-radius: 50%; position: absolute; z-index: 50; box-shadow: 0 2px 8px rgba(231, 76, 60, 0.5);
+            transition: all 0.5s ease-in-out; display: flex; justify-content: center; align-items: center;
+            color: white; font-size: 11px; font-weight: bold; border: 2px solid white;
+        }
+    </style>
+</head>
+<body>
+
+<h1>双梯电梯模拟系统</h1>
+<p class="subtitle">嵌入式状态机 (FSM) & 状态互锁安全逻辑</p>
+
+<div id="simulation-container">
+    
+    <!-- 左侧：控制面板 -->
+    <div id="controls-left">
+        <!-- 小人状态 & 楼层移动 -->
+        <div class="panel-box">
+            <div class="panel-title">
+                乘客位置 
+                <span id="pawn-status-tag" class="status-badge">在楼层</span>
+            </div>
+            
+            <div id="outside-controls">
+                <div class="form-group">
+                    <label for="pawn-floor-select">切换小人所在楼层：</label>
+                    <select id="pawn-floor-select">
+                        <option value="0">G 层 (0楼)</option>
+                        <option value="1">1 层</option>
+                        <option value="2">2 层</option>
+                        <option value="3">3 层</option>
+                        <option value="4">4 层</option>
+                        <option value="5">5 层</option>
+                        <option value="6">6 层</option>
+                        <option value="7">7 层</option>
+                        <option value="8">8 层</option>
+                        <option value="9">9 层</option>
+                    </select>
+                </div>
+                <div id="outside-call-buttons">
+                    <!-- 动态生成外呼按钮 -->
+                </div>
+            </div>
+        </div>
+
+        <!-- 电梯内部控制面板 (进入电梯后显示) -->
+        <div id="inside-controls" class="panel-box" style="display: none;">
+            <div class="panel-title">
+                轿厢选层面板 
+                <span id="inside-car-id" class="status-badge inside">1号梯</span>
+            </div>
+            
+            <div class="npc-info-box">
+                <span>👥 同行乘客：</span>
+                <strong id="npc-count-text">2 人</strong>
+            </div>
+
+            <label>请选择目标楼层（可多选）：</label>
+            <div class="grid-buttons" id="internal-floor-buttons">
+                <!-- 动态生成 0~9 按键 -->
+            </div>
+            <button class="btn btn-exit" id="btn-exit-car" style="margin-top: 15px;">走出电梯 (开门中)</button>
+        </div>
+    </div>
+
+    <!-- 右侧：电梯井道 -->
+    <div id="shafts-container">
+        <!-- 楼层标线 -->
+        <div class="floor-marker" style="bottom: 90%;">9F</div>
+        <div class="floor-marker" style="bottom: 80%;">8F</div>
+        <div class="floor-marker" style="bottom: 70%;">7F</div>
+        <div class="floor-marker" style="bottom: 60%;">6F</div>
+        <div class="floor-marker" style="bottom: 50%;">5F</div>
+        <div class="floor-marker" style="bottom: 40%;">4F</div>
+        <div class="floor-marker" style="bottom: 30%;">3F</div>
+        <div class="floor-marker" style="bottom: 20%;">2F</div>
+        <div class="floor-marker" style="bottom: 10%;">1F</div>
+        <div class="floor-marker" style="bottom: 0%;">G</div>
+
+        <!-- 1号电梯井 -->
+        <div class="elevator-shaft" id="shaft-0">
+            <div class="elevator-car" id="car-0" style="bottom: 0%;">
+                <span class="car-display" id="disp-floor-0">G</span>
+                <span class="car-dir" id="disp-dir-0">待机</span>
+            </div>
+        </div>
+
+        <!-- 2号电梯井 -->
+        <div class="elevator-shaft" id="shaft-1">
+            <div class="elevator-car" id="car-1" style="bottom: 0%;">
+                <span class="car-display" id="disp-floor-1">G</span>
+                <span class="car-dir" id="disp-dir-1">待机</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 小人 -->
+    <div id="user-pawn">我</div>
+</div>
+
+<script>
+    const NUM_FLOORS = 10;
+    const FLOOR_HEIGHT_PC = 10;
+
+    // 电梯状态枚举
+    const STATE = { IDLE: 'IDLE', UP: 'UP', DOWN: 'DOWN', DOOR_OPEN: 'DOOR_OPEN' };
+
+    class Elevator {
+        constructor(id) {
+            this.id = id;
+            this.currentFloor = 0;
+            this.targetQueue = [];
+            this.state = STATE.IDLE;
+            this.npcCount = Math.floor(Math.random() * 3) + 1; // 随机 1-3 名初始 NPC 乘客
+            this.carEl = document.getElementById(`car-${id}`);
+            this.dispFloorEl = document.getElementById(`disp-floor-${id}`);
+            this.dispDirEl = document.getElementById(`disp-dir-${id}`);
+
+            this.npcPressRandomButton();
+        }
+
+        update() {
+            if (this.state === STATE.DOOR_OPEN) return;
+
+            if (this.targetQueue.length > 0) {
+                const target = this.targetQueue[0];
+                if (target > this.currentFloor) {
+                    this.state = STATE.UP;
+                    this.currentFloor++;
+                } else if (target < this.currentFloor) {
+                    this.state = STATE.DOWN;
+                    this.currentFloor--;
+                } else {
+                    // 到达目标楼层
+                    this.state = STATE.DOOR_OPEN;
+                    this.targetQueue.shift();
+                    this.renderStop();
+                    return;
+                }
+                this.renderMove();
+            } else {
+                this.state = STATE.IDLE;
+                this.renderDisplay();
+            }
+        }
+
+        renderMove() {
+            this.carEl.style.bottom = `${this.currentFloor * FLOOR_HEIGHT_PC}%`;
+            this.renderDisplay();
+            if (window.sim) window.sim.updateInsidePanel();
+        }
+
+        renderStop() {
+            this.carEl.style.background = '#27ae60'; // 开门变绿
+            this.renderDisplay();
+
+            // 停靠时模拟 NPC 下车与新 NPC 上车
+            this.simulateNpcChanges();
+
+            if (window.sim) window.sim.onElevatorArrive(this.id, this.currentFloor);
+
+            setTimeout(() => {
+                this.carEl.style.background = '#2c3e50';
+                this.state = STATE.IDLE;
+                this.renderDisplay();
+                if (window.sim) window.sim.updateInsidePanel();
+                this.update();
+            }, 1400);
+        }
+
+        simulateNpcChanges() {
+            if (this.npcCount > 0) {
+                const leaving = Math.floor(Math.random() * Math.min(this.npcCount + 1, 2));
+                this.npcCount = Math.max(0, this.npcCount - leaving);
+            }
+            const boarding = Math.floor(Math.random() * 2);
+            this.npcCount += boarding;
+
+            if (boarding > 0 || (this.npcCount > 0 && Math.random() < 0.5)) {
+                this.npcPressRandomButton();
+            }
+
+            if (window.sim) window.sim.updateInsidePanel();
+        }
+
+        npcPressRandomButton() {
+            if (this.npcCount <= 0) return;
+            const randomFloor = Math.floor(Math.random() * NUM_FLOORS);
+            if (randomFloor !== this.currentFloor && !this.targetQueue.includes(randomFloor)) {
+                this.addCall(randomFloor);
+            }
+        }
+
+        renderDisplay() {
+            this.dispFloorEl.innerText = this.currentFloor === 0 ? 'G' : `${this.currentFloor}F`;
+            let dirText = '待机';
+            if (this.state === STATE.UP) dirText = '▲ 上行';
+            if (this.state === STATE.DOWN) dirText = '▼ 下行';
+            if (this.state === STATE.DOOR_OPEN) dirText = '■ 开门';
+            this.dispDirEl.innerText = dirText;
+        }
+
+        addCall(floor) {
+            if (floor === this.currentFloor) {
+                if (this.state === STATE.IDLE) {
+                    this.state = STATE.DOOR_OPEN;
+                    this.renderStop();
+                }
+                return;
+            }
+
+            if (!this.targetQueue.includes(floor)) {
+                this.targetQueue.push(floor);
+                if (this.state === STATE.UP) {
+                    this.targetQueue.sort((a, b) => a - b);
+                } else if (this.state === STATE.DOWN) {
+                    this.targetQueue.sort((a, b) => b - a);
+                } else {
+                    this.targetQueue.sort((a, b) => Math.abs(a - this.currentFloor) - Math.abs(b - this.currentFloor));
+                }
+            }
+        }
+    }
+
+    class Simulation {
+        constructor() {
+            this.elevators = [new Elevator(0), new Elevator(1)];
+            this.pawn = {
+                floor: 0,
+                inCar: null // null 表示在外面，0 表示在1号梯，1 表示在2号梯
+            };
+
+            this.initUI();
+            this.bindEvents();
+            
+            // 主循环
+            setInterval(() => this.loop(), 900);
+        }
+
+        initUI() {
+            this.renderOutsideButtons(0);
+            this.renderInsideButtons();
+            this.updatePawnPosition();
+        }
+
+        bindEvents() {
+            // 切换小人楼层
+            document.getElementById('pawn-floor-select').addEventListener('change', (e) => {
+                if (this.pawn.inCar === null) {
+                    this.pawn.floor = parseInt(e.target.value);
+                    this.renderOutsideButtons(this.pawn.floor);
+                    this.updatePawnPosition();
+                }
+            });
+
+            // 走出电梯 (增加了逻辑互锁判定)
+            document.getElementById('btn-exit-car').addEventListener('click', () => {
+                if (this.pawn.inCar !== null) {
+                    const car = this.elevators[this.pawn.inCar];
+                    
+                    // 【安全互锁关键代码】：电梯运行中严禁下梯
+                    if (car.state === STATE.UP || car.state === STATE.DOWN) {
+                        return;
+                    }
+
+                    this.pawn.floor = car.currentFloor;
+                    this.pawn.inCar = null;
+                    document.getElementById('pawn-floor-select').value = this.pawn.floor;
+                    
+                    document.getElementById('outside-controls').style.display = 'block';
+                    document.getElementById('inside-controls').style.display = 'none';
+                    document.getElementById('pawn-status-tag').innerText = '在楼层';
+                    document.getElementById('pawn-status-tag').className = 'status-badge';
+
+                    this.renderOutsideButtons(this.pawn.floor);
+                    this.updatePawnPosition();
+                }
+            });
+        }
+
+        renderOutsideButtons(floor) {
+            const container = document.getElementById('outside-call-buttons');
+            container.innerHTML = '';
+
+            if (floor < NUM_FLOORS - 1) {
+                const btnUp = document.createElement('button');
+                btnUp.className = 'btn btn-call';
+                btnUp.innerText = '▲ 呼叫电梯 (上行)';
+                btnUp.onclick = () => this.callElevator(floor, 'UP', btnUp);
+                container.appendChild(btnUp);
+            }
+
+            if (floor > 0) {
+                const btnDown = document.createElement('button');
+                btnDown.className = 'btn btn-call';
+                btnDown.innerText = '▼ 呼叫电梯 (下行)';
+                btnDown.onclick = () => this.callElevator(floor, 'DOWN', btnDown);
+                container.appendChild(btnDown);
+            }
+        }
+
+        renderInsideButtons() {
+            const container = document.getElementById('internal-floor-buttons');
+            container.innerHTML = '';
+            for (let i = NUM_FLOORS - 1; i >= 0; i--) {
+                const btn = document.createElement('button');
+                btn.className = 'btn-floor';
+                btn.id = `btn-floor-${i}`;
+                btn.innerText = i === 0 ? 'G' : `${i}F`;
+                btn.onclick = () => {
+                    if (this.pawn.inCar !== null) {
+                        this.elevators[this.pawn.inCar].addCall(i);
+                        this.updateInsidePanel();
+                    }
+                };
+                container.appendChild(btn);
+            }
+        }
+
+        updateInsidePanel() {
+            if (this.pawn.inCar === null) return;
+            const car = this.elevators[this.pawn.inCar];
+            const exitBtn = document.getElementById('btn-exit-car');
+
+            // 【UI 互锁限制】：根据电梯运行状态决定是否禁用下梯按钮
+            if (car.state === STATE.UP || car.state === STATE.DOWN) {
+                exitBtn.disabled = true;
+                exitBtn.innerText = '运行中 (无法下梯)';
+            } else {
+                exitBtn.disabled = false;
+                exitBtn.innerText = '走出电梯 (已停靠开门)';
+            }
+
+            // 更新 NPC 乘客数显示
+            document.getElementById('npc-count-text').innerText = `${car.npcCount} 人`;
+
+            // 同步楼层按键的高亮状态
+            for (let i = 0; i < NUM_FLOORS; i++) {
+                const btn = document.getElementById(`btn-floor-${i}`);
+                if (btn) {
+                    if (car.targetQueue.includes(i)) {
+                        btn.classList.add('active');
+                    } else {
+                        btn.classList.remove('active');
+                    }
+                }
+            }
+        }
+
+        callElevator(floor, dir, btn) {
+            btn.classList.add('active');
+            btn.innerText = '呼叫中...';
+
+            let bestEl = this.elevators[0];
+            let minDist = Math.abs(this.elevators[0].currentFloor - floor);
+
+            for (let e of this.elevators) {
+                let dist = Math.abs(e.currentFloor - floor);
+                if (dist < minDist) {
+                    minDist = dist;
+                    bestEl = e;
+                }
+            }
+            bestEl.addCall(floor);
+        }
+
+        onElevatorArrive(carId, floor) {
+            if (this.pawn.inCar === null && this.pawn.floor === floor) {
+                this.pawn.inCar = carId;
+                document.getElementById('outside-controls').style.display = 'none';
+                document.getElementById('inside-controls').style.display = 'block';
+                document.getElementById('inside-car-id').innerText = `${carId + 1}号梯`;
+                document.getElementById('pawn-status-tag').innerText = `在${carId + 1}号电梯内`;
+                document.getElementById('pawn-status-tag').className = 'status-badge inside';
+            }
+
+            this.updateInsidePanel();
+            this.updatePawnPosition();
+        }
+
+        updatePawnPosition() {
+            const pawnEl = document.getElementById('user-pawn');
+            if (this.pawn.inCar === null) {
+                pawnEl.style.left = '270px';
+                pawnEl.style.bottom = `calc(${this.pawn.floor * FLOOR_HEIGHT_PC}% + 12px)`;
+            } else {
+                const carId = this.pawn.inCar;
+                const car = this.elevators[carId];
+                const leftPos = carId === 0 ? '375px' : '505px';
+                pawnEl.style.left = leftPos;
+                pawnEl.style.bottom = `calc(${car.currentFloor * FLOOR_HEIGHT_PC}% + 12px)`;
+            }
+        }
+
+        loop() {
+            this.elevators.forEach(e => e.update());
+            this.updatePawnPosition();
+        }
+    }
+
+    window.sim = new Simulation();
+</script>
+
+</body>
+</html>
